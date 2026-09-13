@@ -2,6 +2,9 @@ import os
 import re
 import time
 import asyncio
+import socket
+import socketserver
+import threading
 import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse, unquote
@@ -1759,6 +1762,60 @@ async def callback_handler(
 
 
 # ============================================================
+# KOYEB TCP HEALTH CHECK SERVER
+# ============================================================
+#
+# Koyeb is configured as a Web Service and performs a TCP health
+# check on port 8000. Telegram polling itself does not open a
+# listening port, so this tiny TCP server keeps that health check
+# alive without changing the Telegram bot logic.
+#
+# Koyeb normally provides PORT automatically. We use 8000 as the
+# local/default fallback because that is the configured health-check
+# port.
+# ============================================================
+
+class _HealthCheckHandler(socketserver.BaseRequestHandler):
+
+    def handle(self):
+        try:
+            self.request.settimeout(2)
+            self.request.recv(1024)
+        except Exception:
+            pass
+
+
+class _HealthCheckServer(socketserver.ThreadingTCPServer):
+
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def start_health_check_server():
+
+    port = int(os.getenv("PORT", "8000"))
+
+    server = _HealthCheckServer(
+        ("0.0.0.0", port),
+        _HealthCheckHandler,
+    )
+
+    thread = threading.Thread(
+        target=server.serve_forever,
+        name="koyeb-health-check",
+        daemon=True,
+    )
+
+    thread.start()
+
+    print(
+        f"🌐 Koyeb health-check server listening on port {port}."
+    )
+
+    return server
+
+
+# ============================================================
 # APPLICATION
 # ============================================================
 
@@ -1896,6 +1953,11 @@ def main():
     print(
         "📄 PDF + 🎥 M3U8 → MP4 supported."
     )
+
+    # Start Koyeb TCP health-check listener.
+    # This is required because the Koyeb service is configured
+    # as a Web Service with a TCP health check on port 8000.
+    start_health_check_server()
 
     application.run_polling(
         drop_pending_updates=True
