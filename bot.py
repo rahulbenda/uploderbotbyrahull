@@ -1121,6 +1121,7 @@ async def start_command(
         "• Use title as caption\n\n"
         "Commands:\n"
         "/queue\n"
+        "/cancel <queue_id>\n"
         "/history\n"
         "/stats\n"
         "/clearhistory"
@@ -1462,6 +1463,169 @@ async def queue_command(
     await update.message.reply_text(
         "📚 Current Queue\n\n"
         + "\n".join(lines[-30:])
+    )
+
+
+# ============================================================
+# CANCEL COMMAND
+# ============================================================
+
+async def cancel_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    user_id = update.effective_user.id
+
+    if not is_allowed_user(user_id):
+        return
+
+    # Usage:
+    # /cancel 59
+    # /cancel all
+    if not context.args:
+
+        await update.message.reply_text(
+            "❌ Queue ID missing.\n\n"
+            "Use:\n"
+            "/cancel 59\n"
+            "/cancel all"
+        )
+
+        return
+
+    cancel_target = context.args[0].strip().lower()
+
+    # --------------------------------------------------------
+    # CANCEL ALL ACTIVE / WAITING ITEMS
+    # --------------------------------------------------------
+
+    if cancel_target == "all":
+
+        cancelled_ids = []
+
+        for item_id, item in list(
+            upload_queue.items.items()
+        ):
+
+            if item.user_id != user_id:
+                continue
+
+            if item.status in (
+                "completed",
+                "failed",
+                "cancelled",
+            ):
+                continue
+
+            cancelled = upload_queue.cancel(
+                item_id
+            )
+
+            if cancelled:
+
+                cancelled_ids.append(item_id)
+
+                if item.history_id:
+
+                    update_history(
+                        item.history_id,
+                        "cancelled",
+                        error="Cancelled by user using /cancel all.",
+                    )
+
+        if not cancelled_ids:
+
+            await update.message.reply_text(
+                "ℹ️ There are no active/waiting queue items to cancel."
+            )
+
+            return
+
+        await update.message.reply_text(
+            "🛑 All active/waiting queue items cancelled.\n\n"
+            f"📦 Cancelled: {len(cancelled_ids)}\n"
+            f"🔢 Queue IDs: "
+            + ", ".join(
+                f"#{item_id}"
+                for item_id in cancelled_ids
+            )
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # CANCEL ONE ITEM
+    # --------------------------------------------------------
+
+    try:
+
+        item_id = int(cancel_target)
+
+    except ValueError:
+
+        await update.message.reply_text(
+            "❌ Invalid Queue ID.\n\n"
+            "Use:\n"
+            "/cancel 59\n"
+            "/cancel all"
+        )
+
+        return
+
+    item = upload_queue.get(item_id)
+
+    if not item:
+
+        await update.message.reply_text(
+            f"❌ Queue #{item_id} not found."
+        )
+
+        return
+
+    if item.user_id != user_id:
+
+        await update.message.reply_text(
+            "⛔ You cannot cancel this queue item."
+        )
+
+        return
+
+    if item.status in (
+        "completed",
+        "failed",
+        "cancelled",
+    ):
+
+        await update.message.reply_text(
+            f"ℹ️ Queue #{item_id} is already "
+            f"{item.status}."
+        )
+
+        return
+
+    cancelled = upload_queue.cancel(item_id)
+
+    if not cancelled:
+
+        await update.message.reply_text(
+            f"❌ Could not cancel Queue #{item_id}.\n\n"
+            f"Current status: {item.status}"
+        )
+
+        return
+
+    if item.history_id:
+
+        update_history(
+            item.history_id,
+            "cancelled",
+            error="Cancelled by user.",
+        )
+
+    await update.message.reply_text(
+        f"🛑 Queue #{item_id} cancelled.\n\n"
+        f"📌 {item.file_name or item.caption or 'File'}"
     )
 
 
@@ -1892,6 +2056,13 @@ def main():
         CommandHandler(
             "queue",
             queue_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "cancel",
+            cancel_command,
         )
     )
 
